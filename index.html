@@ -137,6 +137,13 @@
   .entry-meaning { font-size: 14px; font-weight: 600; color: var(--text); line-height: 1.5; }
   .entry-example { font-size: 13px; color: var(--muted); font-style: italic; font-family: 'Lora', Georgia, serif; line-height: 1.45; border-left: 2.5px solid var(--mint); padding-left: 10px; margin-top: 2px; }
   .entry-date { font-size: 11px; color: var(--muted); font-weight: 500; margin-top: 2px; }
+
+  .lang-block { border-radius: 14px; padding: 14px 16px; margin-bottom: 12px; }
+  .english-block { background: #F0EEFF; border-left: 4px solid var(--lavender); }
+  .telugu-block { background: #E8FBF4; border-left: 4px solid var(--mint); }
+  .lang-label { font-size: 11px; font-weight: 900; text-transform: uppercase; letter-spacing: 0.8px; margin-bottom: 6px; color: var(--text); opacity: 0.6; }
+  .lang-text { font-size: 15px; font-weight: 600; color: var(--text); line-height: 1.7; }
+  .telugu-text { font-size: 15px; line-height: 1.9; }
 </style>
 </head>
 <body>
@@ -237,63 +244,35 @@ async function lookupWord() {
   if (!word) return;
   document.getElementById('resultArea').innerHTML = '<div class="loading-dots"><span></span><span></span><span></span></div>';
 
-  // Strategy 1: Free Dictionary API directly (works fine in Safari/Chrome when online)
-  try {
-    var r = await fetch(DICT_URL + encodeURIComponent(word));
-    if (r.ok) { parseDictAPI(await r.json(), word); return; }
-  } catch(e) {}
-
-  // Strategy 2: Free Dictionary API via CORS proxy
-  try {
-    var r2 = await fetch(PROXY + encodeURIComponent(DICT_URL + encodeURIComponent(word)));
-    if (r2.ok) { parseDictAPI(await r2.json(), word); return; }
-  } catch(e) {}
-
-  // Strategy 3: Groq AI directly
+  // Try Groq directly first, then via proxy
   try {
     var result = await callGroq(word, false);
     if (result) { currentWord = result; renderResult(currentWord); return; }
   } catch(e) {}
 
-  // Strategy 4: Groq AI via CORS proxy
   try {
     var result2 = await callGroq(word, true);
     if (result2) { currentWord = result2; renderResult(currentWord); return; }
-  } catch(e2) {}
+  } catch(e) {}
 
-  showError('Could not look up "' + esc(word) + '". Please check your internet connection and try again.');
-}
-
-function parseDictAPI(data, word) {
-  var entry = data[0];
-  var meaning = entry.meanings[0];
-  var def = meaning.definitions[0];
-  var phonetics = entry.phonetics || [];
-  var phonetic = entry.phonetic || (phonetics.find(function(p){ return p.text; }) || {}).text || '';
-  var synonyms = [];
-  entry.meanings.forEach(function(m) {
-    if (m.synonyms) synonyms = synonyms.concat(m.synonyms);
-    m.definitions.forEach(function(d) { if (d.synonyms) synonyms = synonyms.concat(d.synonyms); });
-  });
-  currentWord = {
-    word: entry.word || word,
-    phonetic: phonetic,
-    pos: meaning.partOfSpeech || '',
-    definition: def.definition || '',
-    example: def.example || '',
-    synonyms: synonyms.slice(0, 4),
-    date: today()
-  };
-  renderResult(currentWord);
+  showError('Could not look up "' + esc(word) + '". Please check your internet and try again.');
 }
 
 async function callGroq(word, useProxy) {
-  var prompt = 'Dictionary for 8th grader. Word: "' + word + '". Reply ONLY with raw JSON (no markdown): {"word":"...","phonetic":"...","partOfSpeech":"...","definition":"...","example":"...","synonyms":["...","...","..."]}';
+  var prompt = `You are a fun, friendly teacher explaining English words to an 8th grade Telugu-speaking student.
+For the word "${word}", reply ONLY with a raw JSON object (no markdown, no code fences):
+{
+  "word": "${word}",
+  "english": "A fun, simple explanation in English. Start with what the word means in a relatable way, give a real-life example a kid can picture. Use casual language. Keep it 2-3 sentences.",
+  "telugu": "అదే వివరణను తెలుగులో ఇవ్వండి. సులభమైన భాషలో, పిల్లలకు అర్థమయ్యేలా చెప్పండి. 2-3 వాక్యాలు.",
+  "synonyms": ["word1", "word2", "word3"]
+}`;
+
   var url = useProxy ? PROXY + encodeURIComponent(GROQ_URL) : GROQ_URL;
   var resp = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + GROQ_KEY },
-    body: JSON.stringify({ model: 'llama3-8b-8192', messages: [{ role: 'user', content: prompt }], temperature: 0.2, max_tokens: 300 })
+    body: JSON.stringify({ model: 'llama-3.3-70b-versatile', messages: [{ role: 'user', content: prompt }], temperature: 0.4, max_tokens: 500 })
   });
   if (!resp.ok) throw new Error('Groq ' + resp.status);
   var data = await resp.json();
@@ -301,7 +280,13 @@ async function callGroq(word, useProxy) {
   var match = raw.match(/\{[\s\S]*\}/);
   if (!match) throw new Error('bad JSON');
   var r = JSON.parse(match[0]);
-  return { word: r.word||word, phonetic: r.phonetic||'', pos: r.partOfSpeech||'', definition: r.definition||'', example: r.example||'', synonyms: r.synonyms||[], date: today() };
+  return {
+    word: r.word || word,
+    english: r.english || '',
+    telugu: r.telugu || '',
+    synonyms: r.synonyms || [],
+    date: today()
+  };
 }
 
 function showError(msg) {
@@ -312,16 +297,27 @@ function renderResult(w) {
   var saved = isSaved(w.word);
   var h = '<div class="result-card">';
   h += '<div class="result-word">' + esc(w.word) + '</div>';
-  if (w.phonetic) h += '<span class="result-phonetic">' + esc(w.phonetic) + '</span>';
-  if (w.pos) h += '<span class="result-pos">' + esc(w.pos) + '</span>';
-  h += '<div class="meaning-label">Definition</div>';
-  h += '<div class="meaning-text">' + esc(w.definition) + '</div>';
-  if (w.example) h += '<div class="example-box">&ldquo;' + esc(w.example) + '&rdquo;</div>';
+
+  // English explanation
+  h += '<div class="lang-block english-block">';
+  h += '<div class="lang-label">🇬🇧 English</div>';
+  h += '<div class="lang-text">' + esc(w.english) + '</div>';
+  h += '</div>';
+
+  // Telugu explanation
+  h += '<div class="lang-block telugu-block">';
+  h += '<div class="lang-label">🇮🇳 తెలుగు</div>';
+  h += '<div class="lang-text telugu-text">' + esc(w.telugu) + '</div>';
+  h += '</div>';
+
+  // Synonyms
   if (w.synonyms && w.synonyms.length) {
-    h += '<div class="meaning-label">Synonyms</div><div class="synonyms-row">';
+    h += '<div class="meaning-label" style="margin-bottom:8px;">Similar Words</div>';
+    h += '<div class="synonyms-row">';
     w.synonyms.forEach(function(s) { h += '<button class="synonym-pill" onclick="tapSynonym(\'' + esc(s) + '\')">' + esc(s) + '</button>'; });
     h += '</div>';
   }
+
   h += '<button class="save-btn' + (saved?' saved':'') + '" id="saveBtn" onclick="saveWord()">' + (saved ? '✓ Saved to Notebook!' : '+ Save to My Notebook') + '</button>';
   h += '</div>';
   document.getElementById('resultArea').innerHTML = h;
@@ -359,9 +355,9 @@ function renderNotebook() {
   var h = '<div class="notebook-stats"><div><div class="stats-count">'+nb.length+'</div><div class="stats-label">'+(nb.length===1?'word saved':'words saved')+'</div></div><button class="clear-btn" onclick="clearAll()">Clear all</button></div>';
   nb.forEach(function(e) {
     h += '<div class="vocab-entry"><div class="entry-header"><div class="entry-word">'+esc(e.word)+'</div><button class="entry-delete" onclick="deleteWord(\''+esc(e.word)+'\')">✕</button></div>';
-    if (e.pos) h += '<span class="entry-pos">'+esc(e.pos)+'</span>';
-    h += '<div class="entry-meaning">'+esc(e.definition)+'</div>';
-    if (e.example) h += '<div class="entry-example">&ldquo;'+esc(e.example)+'&rdquo;</div>';
+    if (e.english) h += '<div class="lang-block english-block"><div class="lang-label">🇬🇧 English</div><div class="lang-text">'+esc(e.english)+'</div></div>';
+    if (e.telugu) h += '<div class="lang-block telugu-block"><div class="lang-label">🇮🇳 తెలుగు</div><div class="lang-text telugu-text">'+esc(e.telugu)+'</div></div>';
+
     if (e.date) h += '<div class="entry-date">Saved on '+e.date+'</div>';
     h += '</div>';
   });
