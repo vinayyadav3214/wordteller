@@ -50,3 +50,4 @@ Reply ONLY with raw JSON (no markdown, no code fences):
     return res.status(500).json({ error: err.message });
   }
 }
+
